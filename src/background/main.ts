@@ -9,7 +9,6 @@ import { SelfLightReactor } from "./reconcile/reactors/SelfLightReactor";
 import { DoorReactor } from "./reconcile/reactors/DoorReactor";
 import { WallReactor } from "./reconcile/reactors/WallReactor";
 import { initOverlay } from "./overlay";
-import { createLineMode } from "./createLineMode";
 
 async function waitUntilOBRReady() {
   return new Promise<void>((resolve) => {
@@ -24,7 +23,6 @@ async function init() {
   const CanvasKit = await CanvasKitInit({ locateFile: () => wasm });
   await waitUntilOBRReady();
   createLightMenu();
-  createLineMode();
   createDoorMode(CanvasKit);
   reconciler = new Reconciler(CanvasKit);
   reconciler.register(new LightReactor(reconciler));
