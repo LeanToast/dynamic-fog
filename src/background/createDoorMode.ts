@@ -14,6 +14,7 @@ import { PathHelpers, PathIntersection } from "./util/PathHelpers";
 import { inverseTransformPoint, transformPoint } from "./util/math";
 import { getPluginId } from "../util/getPluginId";
 import { Door } from "../types/Door";
+import { DoorHelpers } from "./util/DoorHelpers";
 import { getMetadata } from "../util/getMetadata";
 
 import doorModeIcon from "../assets/door-mode.svg";
@@ -41,6 +42,7 @@ export function createDoorMode(CanvasKit: CanvasKit) {
       target.skPath,
       inverseTransformPoint(transform, pointerPosition)
     );
+    if (!Number.isFinite(intersection.distance)) return null;
     return {
       ...intersection,
       world: transformPoint(transform, intersection.point),
@@ -141,15 +143,12 @@ export function createDoorMode(CanvasKit: CanvasKit) {
     start: DoorIntersection,
     end: DoorIntersection
   ) {
-    const commands = PathHelpers.getCommandsBetween(
-      CanvasKit,
-      skPath,
-      start.contour,
-      end.contour
-    );
-    if (commands) {
-      path.commands = commands;
-    }
+    const commands = DoorHelpers.getDoorCommands(CanvasKit, skPath, {
+      open: false,
+      start: start.point,
+      end: end.point,
+    });
+    path.commands = commands ?? [];
   }
 
   /**
@@ -337,8 +336,8 @@ export function createDoorMode(CanvasKit: CanvasKit) {
     },
     async onToolDragEnd() {
       if (target && startHit && endHit) {
-        const start = startHit.contour;
-        const end = endHit.contour;
+        const start = startHit.point;
+        const end = endHit.point;
         OBR.scene.items.updateItems([target.item], (items) => {
           const item = items[0];
           if (item) {

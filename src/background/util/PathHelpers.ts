@@ -1,10 +1,9 @@
-import { CanvasKit, Path as SkPath } from "canvaskit-wasm";
+import { CanvasKit, ContourMeasure, Path as SkPath } from "canvaskit-wasm";
 import simplify from "simplify-js";
 import { RegularPolygon } from "./RegularPolygon";
 import { CardinalSpline } from "./CardinalSpline";
 import {
   Command,
-  Math2,
   PathCommand,
   Shape,
   Vector2,
@@ -17,6 +16,8 @@ import {
   isLine,
 } from "@owlbear-rodeo/sdk";
 import { Drawing } from "../../types/Drawing";
+
+const GOLDEN_RATIO = (Math.sqrt(5) - 1) / 2;
 
 export interface ContourMarker {
   /** The distance on the contour */
@@ -191,125 +192,158 @@ export class PathHelpers {
     return simplified;
   }
 
+  /**
+   * Return an approximate nearest point and distance marker on one contour.
+   * The query point and returned distances use the contour's local coordinates.
+   * A zero-length or non-finite contour returns distance: Infinity.
+   *
+   * @param index Contour index to include in the returned marker.
+   * @param tolerance Positive, finite maximum sampling interval. Refinement
+   * targets an interval width of tolerance / 32, not a geometric error bound.
+   * @param sample Optional scratch buffer of at least four floats; overwritten
+   * during the search. The contour measure remains owned by the caller.
+   */
+  static getContourIntersection(
+    measure: ContourMeasure,
+    point: Vector2,
+    index: number,
+    tolerance = 8,
+    sample = new Float32Array(4)
+  ): PathIntersection {
+    if (!Number.isFinite(tolerance) || tolerance <= 0) {
+      throw new RangeError("Path nearest-point tolerance must be positive");
+    }
+    if (sample.length < 4) {
+      throw new RangeError("Path nearest-point sample storage is too small");
+    }
+    const length = measure.length();
+    let bestX = 0;
+    let bestY = 0;
+    let bestDistance = 0;
+    let bestSquared = Infinity;
+    const evaluate = (distance: number) => {
+      measure.getPosTan(distance, sample);
+      const dx = sample[0] - point.x;
+      const dy = sample[1] - point.y;
+      const squared = dx * dx + dy * dy;
+      if (squared < bestSquared) {
+        bestSquared = squared;
+        bestDistance = distance;
+        bestX = sample[0];
+        bestY = sample[1];
+      }
+      return squared;
+    };
+    if (Number.isFinite(length) && length > 0) {
+      const segments = Math.max(1, Math.ceil(length / tolerance));
+      const interval = length / segments;
+      for (let i = 0; i <= segments; i++) {
+        evaluate(i === segments ? length : i * interval);
+      }
+      let low = Math.max(0, bestDistance - interval);
+      let high = Math.min(length, bestDistance + interval);
+      const targetWidth = Math.max(tolerance / 32, Number.EPSILON);
+      if (high - low > targetWidth) {
+        let left = high - (high - low) * GOLDEN_RATIO;
+        let right = low + (high - low) * GOLDEN_RATIO;
+        let leftSquared = evaluate(left);
+        let rightSquared = evaluate(right);
+        while (high - low > targetWidth) {
+          // Golden-section spacing lets each narrower interval reuse one sample.
+          if (leftSquared <= rightSquared) {
+            high = right;
+            right = left;
+            rightSquared = leftSquared;
+            left = high - (high - low) * GOLDEN_RATIO;
+            if (left <= low || left >= right) break;
+            leftSquared = evaluate(left);
+          } else {
+            low = left;
+            left = right;
+            leftSquared = rightSquared;
+            right = low + (high - low) * GOLDEN_RATIO;
+            if (right <= left || right >= high) break;
+            rightSquared = evaluate(right);
+          }
+        }
+      }
+    }
+    return {
+      point: { x: bestX, y: bestY },
+      distance: Math.sqrt(bestSquared),
+      contour: { index, distance: bestDistance },
+    };
+  }
+
   static getSkPathIntersection(
     CanvasKit: CanvasKit,
     skPath: SkPath,
     point: Vector2
   ): PathIntersection {
     const iter = new CanvasKit.ContourMeasureIter(skPath, false, 1);
-    let measure = iter.next();
-    let bestDistance = Infinity;
-    let best: Float32Array = new Float32Array([0, 0, 0, 0]);
-    let bestLength = 0;
-    let bestContour = 0;
-
-    let i = 0;
-    while (measure !== null) {
-      const pathLength = measure.length();
-      let precision = 8;
-      let bestContourLength = 0;
-      let isClose = false;
-
-      // Perform a coarse search for a closer point
-      for (
-        let scanLength = 0;
-        scanLength <= pathLength;
-        scanLength += precision
-      ) {
-        const scan = measure.getPosTan(scanLength);
-        const scanDistance = Math2.distance({ x: scan[0], y: scan[1] }, point);
-        if (scanDistance < bestDistance) {
-          best = scan;
-          bestContourLength = scanLength;
-          bestDistance = scanDistance;
-          bestLength = scanLength;
-          bestContour = i;
-          isClose = true;
-        }
-      }
-
-      // If any of the coarse points are the closest refine it using binary search
-      if (isClose) {
-        precision /= 2;
-        while (precision > 0.5) {
-          const beforeLength = bestContourLength - precision;
-          const afterLength = bestContourLength + precision;
-          const before = measure.getPosTan(beforeLength);
-          const after = measure.getPosTan(afterLength);
-          const beforeDistance = Math2.distance(
-            { x: before[0], y: before[1] },
-            point
-          );
-          const afterDistance = Math2.distance(
-            { x: after[0], y: after[1] },
-            point
-          );
-          if (beforeLength >= 0 && beforeDistance < bestDistance) {
-            best = before;
-            bestContourLength = beforeLength;
-            bestDistance = beforeDistance;
-            bestLength = beforeLength;
-            bestContour = i;
-          } else if (
-            afterLength <= pathLength &&
-            afterDistance < bestDistance
-          ) {
-            best = after;
-            bestContourLength = afterLength;
-            bestDistance = afterDistance;
-            bestLength = afterLength;
-            bestContour = i;
-          } else {
-            precision /= 2;
-          }
-        }
-      }
-
-      i++;
-      measure = iter.next();
-    }
-
-    iter.delete();
-
-    return {
-      point: { x: best[0], y: best[1] },
-      distance: bestDistance,
-      contour: {
-        distance: bestLength,
-        index: bestContour,
-      },
+    let best: PathIntersection = {
+      point: { x: 0, y: 0 },
+      distance: Infinity,
+      contour: { index: 0, distance: 0 },
     };
+    let measure;
+    let index = 0;
+    const sample = new Float32Array(4);
+    while ((measure = iter.next()) !== null) {
+      const hit = PathHelpers.getContourIntersection(
+        measure, point, index++, undefined, sample
+      );
+      if (hit.distance < best.distance) best = hit;
+      measure.delete();
+    }
+    iter.delete();
+    return best;
   }
 
+  /**
+   * Extract the segment between two absolute distance markers on one contour.
+   * With shortestRoute, closed contours may wrap across the seam; ties use the
+   * non-wrapping route, and segments at most 0.001 local units return null.
+   * Mismatched or missing contours return null. The caller owns the returned
+   * path and must delete it; the source path is not modified.
+   */
   static getSkPathBetween(
     CanvasKit: CanvasKit,
     skPath: SkPath,
     start: ContourMarker,
-    end: ContourMarker
+    end: ContourMarker,
+    shortestRoute = false
   ): SkPath | null {
-    if (start.index !== end.index) {
-      console.warn("Unable to update subpath across contours");
-      return null;
-    }
+    if (start.index !== end.index) return null;
     const iter = new CanvasKit.ContourMeasureIter(skPath, false, 1);
-    let measure = iter.next();
-    let i = 0;
-    while (measure !== null) {
-      // Find the correct contour
-      if (i !== start.index) {
-        measure = iter.next();
-        i++;
-      } else {
-        const segment = measure.getSegment(
-          Math.min(start.distance, end.distance),
-          Math.max(start.distance, end.distance),
-          true
-        );
-
-        return segment;
+    let measure;
+    let index = 0;
+    try {
+      while ((measure = iter.next()) !== null) {
+        try {
+          if (index++ !== start.index) continue;
+          const length = measure.length();
+          const low = Math.min(start.distance, end.distance);
+          const high = Math.max(start.distance, end.distance);
+          if (shortestRoute && (length <= 0 || high - low <= 0.001)) return null;
+          if (shortestRoute && measure.isClosed() && high - low > length / 2) {
+            if (length - high + low <= 0.001) return null;
+            const segment = measure.getSegment(high, length, true);
+            const head = measure.getSegment(0, low, true);
+            // Extend mode joins the seam into one contour for midpoint measurement.
+            segment.addPath(head, true);
+            head.delete();
+            return segment;
+          }
+          return measure.getSegment(low, high, true);
+        } finally {
+          measure.delete();
+        }
       }
+      return null;
+    } finally {
+      iter.delete();
     }
-    return null;
   }
 
   static getCommandsBetween(
@@ -334,20 +368,22 @@ export class PathHelpers {
     contour = 0
   ): Vector2 | null {
     const iter = new CanvasKit.ContourMeasureIter(skPath, false, 1);
-    let measure = iter.next();
-    let i = 0;
-    while (measure !== null) {
-      // Find the correct contour
-      if (i !== contour) {
-        measure = iter.next();
-        i++;
-      } else {
-        const mid = measure.length() * percentDistance;
-        const [x, y] = measure.getPosTan(mid);
-        return { x, y };
+    let measure;
+    let index = 0;
+    try {
+      while ((measure = iter.next()) !== null) {
+        try {
+          if (index++ !== contour) continue;
+          const [x, y] = measure.getPosTan(measure.length() * percentDistance);
+          return { x, y };
+        } finally {
+          measure.delete();
+        }
       }
+      return null;
+    } finally {
+      iter.delete();
     }
-    return null;
   }
 
   /**

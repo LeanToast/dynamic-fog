@@ -7,6 +7,7 @@ import { getPluginId } from "../../../util/getPluginId";
 import { Door } from "../../../types/Door";
 import { Drawing, isDrawing } from "../../../types/Drawing";
 import { PathHelpers } from "../../util/PathHelpers";
+import { DoorHelpers } from "../../util/DoorHelpers";
 
 export interface DoorComponent {
   base: Door;
@@ -33,37 +34,10 @@ export class DoorActor extends Actor {
     if (!isDrawing(parent)) {
       return;
     }
-    const prev = this.doors;
-    const next = getMetadata<Door[]>(parent.metadata, getPluginId("doors"), []);
-    if (prev.length < next.length) {
-      // Need to add more doors as there are new ones
-      for (let i = prev.length; i < next.length; i++) {
-        const door = next[i];
-        const visual = this.doorToDoorComponent(parent, door);
-        if (visual) {
-          prev.push(visual);
-        }
-      }
-    } else if (prev.length > next.length) {
-      // Need to remove doors as there are less
-      const numRemoved = prev.length - next.length;
-      const toDelete = prev.splice(prev.length - numRemoved, numRemoved);
-      // Delete door paths
-      for (const visual of toDelete) {
-        visual.skPath.delete();
-      }
-    }
-    // Update remaining doors
-    for (let i = 0; i < prev.length; i++) {
-      const door = prev[i];
-      const nextDoor = next[i];
-      door.base = nextDoor;
-      const nextSkPath = this.getDoorSkPath(parent, nextDoor);
-      if (nextSkPath) {
-        door.skPath.delete();
-        door.skPath = nextSkPath;
-      }
-    }
+    // Invalid doors are omitted, so component positions cannot index metadata.
+    // Rebuilding also removes openings whose geometry is no longer valid.
+    this.delete();
+    this.doors = this.drawingToDoorComponents(parent);
   }
 
   private drawingToDoorComponents(drawing: Drawing): DoorComponent[] {
@@ -105,12 +79,7 @@ export class DoorActor extends Actor {
     if (!skPath) {
       return null;
     }
-    const segment = PathHelpers.getSkPathBetween(
-      this.reconciler.CanvasKit,
-      skPath,
-      door.start,
-      door.end
-    );
+    const segment = DoorHelpers.getDoorSkPath(this.reconciler.CanvasKit, skPath, door);
     skPath.delete();
     if (!segment) {
       return null;

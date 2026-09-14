@@ -14,6 +14,7 @@ import {
 import { Actor } from "../Actor";
 import { Reconciler } from "../Reconciler";
 import { PathHelpers } from "../../util/PathHelpers";
+import { DoorHelpers } from "../../util/DoorHelpers";
 import { Door } from "../../../types/Door";
 import { Drawing, isDrawing } from "../../../types/Drawing";
 import { getMetadata } from "../../../util/getMetadata";
@@ -42,6 +43,8 @@ const CLOSE_COLOR = "#ff4d4d";
 
 export interface DoorOverlayComponent {
   base: Door;
+  /** Position in the parent door metadata array, including invalid entries. */
+  index: number;
   // ID of the current billboard item
   billboard: string;
   // ID of the current path item
@@ -57,6 +60,7 @@ export class DoorOverlayActor extends Actor {
       this.doors.push(
         ...items.map((item) => ({
           base: item.base,
+          index: item.index,
           billboard: item.billboard.id,
           path: item.path.id,
         }))
@@ -77,37 +81,30 @@ export class DoorOverlayActor extends Actor {
     if (!isDrawing(parent)) {
       return;
     }
-    const prev = this.doors;
+    const previous = new Map(this.doors.map((door) => [door.index, door]));
     const next = getMetadata<Door[]>(parent.metadata, getPluginId("doors"), []);
-    if (prev.length < next.length) {
-      // Need to add more doors as there are new ones
-      for (let i = prev.length; i < next.length; i++) {
-        const door = next[i];
-        const items = this.doorToDoorItems(parent, door, i);
+    this.doors = [];
+    for (let i = 0; i < next.length; i++) {
+      const nextDoor = next[i];
+      const door = previous.get(i);
+      if (!door) {
+        const items = this.doorToDoorItems(parent, nextDoor, i);
         if (items) {
-          prev.push({
-            base: items.base,
+          this.doors.push({
+            base: nextDoor,
+            index: items.index,
             billboard: items.billboard.id,
             path: items.path.id,
           });
           this.reconciler.patcher.addItems(items.billboard, items.path);
         }
+        continue;
       }
-    } else if (prev.length > next.length) {
-      // Need to remove doors as there are less
-      const numRemoved = prev.length - next.length;
-      const toDelete = prev.splice(prev.length - numRemoved, numRemoved);
-      this.reconciler.patcher.deleteItems(
-        ...toDelete.flatMap((door) => [door.billboard, door.path])
-      );
-    }
-    // Update remaining doors
-    for (let i = 0; i < prev.length; i++) {
-      const door = prev[i];
-      const nextDoor = next[i];
       door.base = nextDoor;
       const values = this.getDoorCenterAndCommands(parent, nextDoor);
       if (values) {
+        previous.delete(i);
+        this.doors.push(door);
         const [center, commands] = values;
         this.reconciler.patcher.updateItems(
           [
@@ -142,15 +139,20 @@ export class DoorOverlayActor extends Actor {
         );
       }
     }
+    this.reconciler.patcher.deleteItems(
+      ...[...previous.values()].flatMap((door) => [door.billboard, door.path])
+    );
   }
 
   private drawingToDoorItems(drawing: Drawing): {
     base: Door;
+    index: number;
     billboard: Billboard;
     path: Path;
   }[] {
     const doorItems: {
       base: Door;
+      index: number;
       billboard: Billboard;
       path: Path;
     }[] = [];
@@ -176,6 +178,7 @@ export class DoorOverlayActor extends Actor {
     index: number
   ): {
     base: Door;
+    index: number;
     billboard: Billboard;
     path: Path;
   } | null {
@@ -186,6 +189,7 @@ export class DoorOverlayActor extends Actor {
     const [center, commands] = values;
     return {
       base: door,
+      index,
       billboard: this.getBillboard(drawing, door.open, index, center),
       path: this.getPath(drawing, door.open, index, commands),
     };
@@ -206,6 +210,7 @@ export class DoorOverlayActor extends Actor {
     const center =
       relativeCenter && transformPoint(MathM.fromItem(drawing), relativeCenter);
     if (!center) {
+      skPath.delete();
       return null;
     }
     const commands = PathHelpers.skPathToPathCommands(skPath);
@@ -222,12 +227,7 @@ export class DoorOverlayActor extends Actor {
     if (!skPath) {
       return null;
     }
-    const segment = PathHelpers.getSkPathBetween(
-      this.reconciler.CanvasKit,
-      skPath,
-      door.start,
-      door.end
-    );
+    const segment = DoorHelpers.getDoorSkPath(this.reconciler.CanvasKit, skPath, door);
     skPath.delete();
 
     return segment;
