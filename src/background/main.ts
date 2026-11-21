@@ -10,6 +10,7 @@ import { DoorReactor } from "./reconcile/reactors/DoorReactor";
 import { WallReactor } from "./reconcile/reactors/WallReactor";
 import { initOverlay } from "./overlay";
 import { createLineMode } from "./createLineMode";
+import { initDarkness } from "./darkness";
 
 async function waitUntilOBRReady() {
   return new Promise<void>((resolve) => {
@@ -20,6 +21,7 @@ async function waitUntilOBRReady() {
 }
 
 let reconciler: Reconciler | null = null;
+let stopDarkness: VoidFunction | null = null;
 async function init() {
   const CanvasKit = await CanvasKitInit({ locateFile: () => wasm });
   await waitUntilOBRReady();
@@ -32,6 +34,7 @@ async function init() {
   reconciler.register(new DoorReactor(reconciler));
   reconciler.register(new WallReactor(reconciler));
   initOverlay(reconciler);
+  stopDarkness = initDarkness();
 }
 
 init();
@@ -41,5 +44,6 @@ if (import.meta.hot) {
   import.meta.hot.accept();
   import.meta.hot.dispose(() => {
     reconciler?.delete();
+    stopDarkness?.();
   });
 }

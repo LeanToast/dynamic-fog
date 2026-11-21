@@ -1,5 +1,6 @@
 import Button from "@mui/material/Button";
 import Stack from "@mui/material/Stack";
+import Slider from "@mui/material/Slider";
 import OBR, { GridScale, Item } from "@owlbear-rodeo/sdk";
 import { getPluginId } from "../util/getPluginId";
 
@@ -28,6 +29,48 @@ const SmallLabel = styled(FormLabel)({
   fontSize: "0.75rem",
   marginBottom: 4,
 });
+
+/** A slider that only saves when it is let go of */
+function SettingSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (value: number) => string;
+  onCommit: (value: number) => void;
+}) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  return (
+    <FormControl fullWidth sx={{ px: 0.5 }}>
+      <SmallLabel sx={{ mb: 0, ml: -0.5 }}>
+        {label}: {format(local)}
+      </SmallLabel>
+      <Slider
+        aria-label={label}
+        size="small"
+        value={local}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(_, v) => setLocal(v as number)}
+        onChangeCommitted={(_, v) => onCommit(v as number)}
+      />
+    </FormControl>
+  );
+}
 
 export function Menu() {
   const [gridScale, setGridScale] = useState<GridScale | null>(null);
@@ -116,8 +159,23 @@ function MenuControls({
     outerAngle: 360,
     lightType: "PRIMARY",
     rotation: 0,
+    sightRadius: 0,
+    brightRadius: config.attenuationRadius ?? 12 * 150,
+    flicker: 0,
     ...config,
   };
+  // Older saved lights may hold a non number here
+  const flickerValue = typeof values.flicker === "number" ? values.flicker : 0;
+  const brightValue = Math.min(
+    typeof values.brightRadius === "number"
+      ? values.brightRadius
+      : values.attenuationRadius,
+    values.attenuationRadius
+  );
+  const formatDistance = (value: number) =>
+    `${((value / gridDpi) * gridScale.parsed.multiplier).toFixed(
+      gridScale.parsed.digits
+    )}${gridScale.parsed.unit}`;
 
   async function handleAttenuationChange(value: number) {
     await OBR.scene.items.updateItems(items, (items) => {
@@ -177,7 +235,41 @@ function MenuControls({
     });
   }
 
+  async function handleSightChange(value: number) {
+    await OBR.scene.items.updateItems(items, (items) => {
+      for (const item of items) {
+        const config = item.metadata[getPluginId("light")];
+        if (isPlainObject(config)) {
+          config.sightRadius = Number.isFinite(value) ? Math.max(0, value) : 0;
+        }
+      }
+    });
+  }
+
+  async function handleBrightChange(value: number) {
+    await OBR.scene.items.updateItems(items, (items) => {
+      for (const item of items) {
+        const config = item.metadata[getPluginId("light")];
+        if (isPlainObject(config)) {
+          config.brightRadius = value;
+        }
+      }
+    });
+  }
+
+  async function handleFlickerChange(value: number) {
+    await OBR.scene.items.updateItems(items, (items) => {
+      for (const item of items) {
+        const config = item.metadata[getPluginId("light")];
+        if (isPlainObject(config)) {
+          config.flicker = value;
+        }
+      }
+    });
+  }
+
   const isHalfAngle = angleValue === "HALF";
+  const isPrimary = values.lightType === "PRIMARY";
 
   return (
     <Stack px={2} py={1}>
@@ -268,6 +360,72 @@ function MenuControls({
           </ToggleButtonGroup>
         </FormControl>
       </Stack>
+      <Stack sx={{ mb: 1 }}>
+        <SettingSlider
+          label="Bright radius"
+          value={brightValue}
+          min={0}
+          max={values.attenuationRadius}
+          step={gridDpi / 2}
+          format={formatDistance}
+          onCommit={handleBrightChange}
+        />
+        <SettingSlider
+          label="Dim radius"
+          value={values.attenuationRadius}
+          min={gridDpi}
+          max={Math.max(24 * gridDpi, values.attenuationRadius)}
+          step={gridDpi}
+          format={formatDistance}
+          onCommit={handleAttenuationChange}
+        />
+        <SettingSlider
+          label="Flicker"
+          value={flickerValue}
+          min={0}
+          max={1}
+          step={0.05}
+          format={(value) => (value === 0 ? "off" : `${Math.round(value * 100)}%`)}
+          onCommit={handleFlickerChange}
+        />
+      </Stack>
+      <Stack gap={1} direction="row" sx={{ mb: 2 }} alignItems="center">
+        <FormControl fullWidth disabled={!isPrimary}>
+          <SmallLabel>
+            {isPrimary
+              ? "Sight distance (0 = no limit)"
+              : "Sight distance (character lights only)"}
+          </SmallLabel>
+          <NumberField
+            aria-label="Sight distance"
+            variant="outlined"
+            disabled={!isPrimary}
+            numberToText={(value) =>
+              `${((value / gridDpi) * gridScale.parsed.multiplier).toFixed(
+                gridScale.parsed.digits
+              )}`
+            }
+            textToNumber={(value) =>
+              (parseFloat(value) / gridScale.parsed.multiplier) * gridDpi
+            }
+            step={gridDpi}
+            min={0}
+            size="small"
+            value={values.sightRadius}
+            onChange={handleSightChange}
+            autoComplete="off"
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    {gridScale.parsed.unit}
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
+        </FormControl>
+      </Stack>
       <Stack gap={1} direction="row" alignItems="center">
         {isHalfAngle && (
           <Button
@@ -326,6 +484,13 @@ function MenuSkeleton() {
       </Stack>
       <Stack gap={1} direction="row" sx={{ mb: 2 }} alignItems="center">
         <FormControlSkeleton />
+        <FormControlSkeleton />
+      </Stack>
+      <Stack gap={1} direction="row" sx={{ mb: 2 }} alignItems="center">
+        <FormControlSkeleton />
+        <FormControlSkeleton />
+      </Stack>
+      <Stack gap={1} direction="row" sx={{ mb: 2 }} alignItems="center">
         <FormControlSkeleton />
       </Stack>
       <Skeleton

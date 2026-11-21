@@ -74,8 +74,8 @@ export function createLightMenu() {
       },
     ],
     embed: {
-      url: "/menu.html",
-      height: 194,
+      url: `${import.meta.env.BASE_URL}menu.html`,
+      height: 470,
     },
   });
 }

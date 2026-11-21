@@ -1,10 +1,10 @@
 {
-  "name": "Dynamic Fog",
+  "name": "Dynamic Fog Plus",
   "version": "1.1.0",
   "manifest_version": 1,
-  "author": "Owlbear Rodeo",
-  "homepage_url": "https://extensions.owlbear.rodeo/dynamic-fog",
+  "author": "Owlbear Rodeo (modified)",
+  "homepage_url": "https://github.com/LeanToast/dynamic-fog",
   "icon": "/logo.png",
-  "description": "Add walls, doors and lights for a simple dynamic fog experience",
+  "description": "Dynamic Fog with sight distance, light gradients and torch flicker",
   "background_url": "/background.html"
 }
